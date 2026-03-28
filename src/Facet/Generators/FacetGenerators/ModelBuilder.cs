@@ -83,6 +83,8 @@ internal static class ModelBuilder
 
         // Extract nested facets parameter and build mapping from source type to child facet type
         var nestedFacetMappings = AttributeParser.ExtractNestedFacetMappings(attribute, context.SemanticModel.Compilation);
+        var configuredBaseTypeName = AttributeParser.ExtractBaseTypeName(attribute);
+        var configuredInterfaceTypeNames = AttributeParser.ExtractInterfaceTypeNames(attribute);
 
         // Extract MapFrom attribute mappings from target type properties
         var expressionMembers = new List<FacetMember>();
@@ -178,7 +180,7 @@ internal static class ModelBuilder
         }
 
         // Collect base class member names to avoid generating duplicate properties
-        var baseClassMemberNames = GetBaseClassMemberNames(targetSymbol);
+        var baseClassMemberNames = GetBaseClassMemberNames(targetSymbol, attribute);
 
         // Extract FlattenTo types for generating collection flattening methods
         var flattenToTypes = AttributeParser.ExtractFlattenToTypes(attribute);
@@ -210,6 +212,8 @@ internal static class ModelBuilder
             preserveReferences,
             baseClassMemberNames,
             flattenToTypes,
+            configuredBaseTypeName,
+            configuredInterfaceTypeNames,
             beforeMapConfigurationTypeName,
             afterMapConfigurationTypeName,
             chainToParameterlessConstructor,
@@ -829,9 +833,9 @@ private static Dictionary<string, (string targetName, string source, bool revers
     /// Gets all member names from the target type's base classes.
     /// This is used to avoid generating properties that already exist in base classes.
     /// </summary>
-    private static ImmutableArray<string> GetBaseClassMemberNames(INamedTypeSymbol targetSymbol)
+    private static ImmutableArray<string> GetBaseClassMemberNames(INamedTypeSymbol targetSymbol, AttributeData attribute)
     {
-        var memberNames = new List<string>();
+        var memberNames = new HashSet<string>();
 
         // Walk up the inheritance chain
         var baseType = targetSymbol.BaseType;
@@ -851,7 +855,44 @@ private static Dictionary<string, (string targetName, string source, bool revers
             baseType = baseType.BaseType;
         }
 
+        var configuredBaseArg = attribute.NamedArguments.FirstOrDefault(kvp => kvp.Key == FacetConstants.AttributeNames.BaseType);
+        if (configuredBaseArg.Value.Value is INamedTypeSymbol configuredBaseType)
+        {
+            foreach (var member in GetPublicMembersFromBaseType(configuredBaseType))
+            {
+                memberNames.Add(member.Name);
+            }
+        }
+
         return memberNames.ToImmutableArray();
+    }
+
+    private static IEnumerable<ISymbol> GetPublicMembersFromBaseType(INamedTypeSymbol baseType)
+    {
+        var visited = new HashSet<string>();
+        var current = baseType;
+
+        while (current != null && current.SpecialType != SpecialType.System_Object)
+        {
+            foreach (var member in current.GetMembers())
+            {
+                if (member.DeclaredAccessibility != Accessibility.Public || visited.Contains(member.Name))
+                    continue;
+
+                if (member is IPropertySymbol property)
+                {
+                    visited.Add(property.Name);
+                    yield return property;
+                }
+                else if (member is IFieldSymbol field && !field.IsImplicitlyDeclared)
+                {
+                    visited.Add(field.Name);
+                    yield return field;
+                }
+            }
+
+            current = current.BaseType;
+        }
     }
 
     /// <summary>

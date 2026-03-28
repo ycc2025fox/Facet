@@ -77,18 +77,12 @@ internal static class CodeBuilder
         // Only generate positional declaration if there's no existing primary constructor
         if (isPositional)
         {
-            GeneratePositionalDeclaration(sb, model, keyword, containingTypeIndent);
+            GeneratePositionalDeclaration(sb, model, keyword, containingTypeIndent, BuildInheritanceClause(model, shouldGenerateEquality));
         }
 
         // Generate the type declaration, including IEquatable<T> if equality is requested
-        if (shouldGenerateEquality)
-        {
-            sb.AppendLine($"{containingTypeIndent}{model.Accessibility} partial {keyword} {model.Name} : {EqualityGenerator.GetEquatableInterface(model)}");
-        }
-        else
-        {
-            sb.AppendLine($"{containingTypeIndent}{model.Accessibility} partial {keyword} {model.Name}");
-        }
+        var inheritanceClause = isPositional ? string.Empty : BuildInheritanceClause(model, shouldGenerateEquality);
+        sb.AppendLine($"{containingTypeIndent}{model.Accessibility} partial {keyword} {model.Name}{inheritanceClause}");
         sb.AppendLine($"{containingTypeIndent}{{");
 
         var memberIndent = containingTypeIndent + "    ";
@@ -198,7 +192,7 @@ internal static class CodeBuilder
         };
     }
 
-    private static void GeneratePositionalDeclaration(StringBuilder sb, FacetTargetModel model, string keyword, string indent)
+    private static void GeneratePositionalDeclaration(StringBuilder sb, FacetTargetModel model, string keyword, string indent, string inheritanceClause)
     {
         var parameters = string.Join(", ",
             model.Members.Select(m =>
@@ -214,8 +208,35 @@ internal static class CodeBuilder
         // Suppress CS1591 (missing XML comment) warnings for generated positional declarations
         // This prevents warnings when GenerateDocumentationFile is enabled
         sb.AppendLine($"{indent}#pragma warning disable CS1591");
-        sb.AppendLine($"{indent}{model.Accessibility} partial {keyword} {model.Name}({parameters});");
+        sb.AppendLine($"{indent}{model.Accessibility} partial {keyword} {model.Name}({parameters}){inheritanceClause};");
         sb.AppendLine($"{indent}#pragma warning restore CS1591");
+    }
+
+    private static string BuildInheritanceClause(FacetTargetModel model, bool includeEqualityInterface)
+    {
+        var inheritedTypes = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(model.ConfiguredBaseTypeName))
+        {
+            inheritedTypes.Add(model.ConfiguredBaseTypeName!);
+        }
+
+        foreach (var interfaceTypeName in model.ConfiguredInterfaceTypeNames)
+        {
+            if (!string.IsNullOrWhiteSpace(interfaceTypeName))
+            {
+                inheritedTypes.Add(interfaceTypeName);
+            }
+        }
+
+        if (includeEqualityInterface)
+        {
+            inheritedTypes.Add(EqualityGenerator.GetEquatableInterface(model));
+        }
+
+        return inheritedTypes.Count == 0
+            ? string.Empty
+            : " : " + string.Join(", ", inheritedTypes);
     }
 
     #endregion

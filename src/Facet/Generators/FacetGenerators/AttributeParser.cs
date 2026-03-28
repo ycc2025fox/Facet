@@ -155,6 +155,45 @@ internal static class AttributeParser
     }
 
     /// <summary>
+    /// Extracts the configured base type name from the attribute.
+    /// </summary>
+    public static string? ExtractBaseTypeName(AttributeData attribute)
+    {
+        var arg = attribute.NamedArguments
+            .FirstOrDefault(kvp => kvp.Key == FacetConstants.AttributeNames.BaseType);
+
+        if (arg.Value.Value is INamedTypeSymbol typeSymbol)
+        {
+            return typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Extracts configured interface type names from the attribute.
+    /// </summary>
+    public static ImmutableArray<string> ExtractInterfaceTypeNames(AttributeData attribute)
+    {
+        var interfacesArg = attribute.NamedArguments.FirstOrDefault(kvp => kvp.Key == FacetConstants.AttributeNames.Interfaces);
+        if (interfacesArg.Value.Kind != TypedConstantKind.Error && !interfacesArg.Value.IsNull && interfacesArg.Value.Kind == TypedConstantKind.Array)
+        {
+            var interfaces = new List<string>();
+            foreach (var typeValue in interfacesArg.Value.Values)
+            {
+                if (typeValue.Value is INamedTypeSymbol interfaceType)
+                {
+                    interfaces.Add(interfaceType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat));
+                }
+            }
+
+            return interfaces.Distinct().ToImmutableArray();
+        }
+
+        return ImmutableArray<string>.Empty;
+    }
+
+    /// <summary>
     /// Extracts the configuration type name from the attribute.
     /// </summary>
     public static string? ExtractConfigurationTypeName(AttributeData attribute)

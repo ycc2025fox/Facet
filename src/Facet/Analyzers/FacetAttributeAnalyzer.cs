@@ -117,6 +117,46 @@ public class FacetAttributeAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: "The source entity's structure has changed since the SourceSignature was set. Review the changes and update the signature to acknowledge them.");
 
+    // FAC024: Conflicting inheritance declarations
+    public static readonly DiagnosticDescriptor ConflictingInheritanceConfigurationRule = new DiagnosticDescriptor(
+        "FAC024",
+        "Conflicting inheritance configuration",
+        "Type '{0}' already declares a base type or interfaces. Remove the declaration or the [Facet] BaseType/Interfaces configuration.",
+        "Usage",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true,
+        description: "Facet inheritance must be declared in one place only to avoid partial type conflicts.");
+
+    // FAC025: Invalid configured base type
+    public static readonly DiagnosticDescriptor InvalidBaseTypeRule = new DiagnosticDescriptor(
+        "FAC025",
+        "Invalid BaseType configuration",
+        "BaseType '{0}' is invalid: {1}",
+        "Usage",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true,
+        description: "BaseType must be a valid, inheritable class compatible with the target facet type.");
+
+    // FAC026: Invalid configured interface
+    public static readonly DiagnosticDescriptor InvalidInterfaceRule = new DiagnosticDescriptor(
+        "FAC026",
+        "Invalid Interfaces configuration",
+        "Interface '{0}' is invalid: {1}",
+        "Usage",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true,
+        description: "Interfaces must be valid interface types supported by facet generation.");
+
+    // FAC027: Interface property not satisfied
+    public static readonly DiagnosticDescriptor InterfacePropertyNotSatisfiedRule = new DiagnosticDescriptor(
+        "FAC027",
+        "Configured interface member is not satisfied",
+        "Interface property '{0}' from '{1}' is not satisfied by generated members, BaseType, or user-declared properties",
+        "Usage",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true,
+        description: "Configured interfaces must be fully satisfied by the generated facet type.");
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(
         MissingPartialKeywordRule,
         InvalidPropertyNameRule,
@@ -127,7 +167,11 @@ public class FacetAttributeAnalyzer : DiagnosticAnalyzer
         IncludeAndExcludeBothSpecifiedRule,
         MaxDepthWarningRule,
         GenerateToSourceNotPossibleRule,
-        SourceSignatureMismatchRule);
+        SourceSignatureMismatchRule,
+        ConflictingInheritanceConfigurationRule,
+        InvalidBaseTypeRule,
+        InvalidInterfaceRule,
+        InterfacePropertyNotSatisfiedRule);
 
     public override void Initialize(AnalysisContext context)
     {
@@ -185,6 +229,7 @@ public class FacetAttributeAnalyzer : DiagnosticAnalyzer
         ValidateCircularReferenceSafety(context, facetAttr, namedArgs);
         ValidateSourceSignature(context, facetAttr, sourceType, namedArgs);
         ValidateGenerateToSource(context, facetAttr, sourceType, targetType, namedArgs);
+        ValidateConfiguredInheritance(context, facetAttr, targetType, sourceType, namedArgs);
     }
 
     /// <summary>
@@ -200,6 +245,8 @@ public class FacetAttributeAnalyzer : DiagnosticAnalyzer
         public KeyValuePair<string, TypedConstant> SourceSignature { get; }
         public KeyValuePair<string, TypedConstant> IncludeFields { get; }
         public KeyValuePair<string, TypedConstant> GenerateToSource { get; }
+        public KeyValuePair<string, TypedConstant> BaseType { get; }
+        public KeyValuePair<string, TypedConstant> Interfaces { get; }
 
         public FacetNamedArguments(ImmutableArray<KeyValuePair<string, TypedConstant>> namedArguments)
         {
@@ -211,6 +258,8 @@ public class FacetAttributeAnalyzer : DiagnosticAnalyzer
             SourceSignature = namedArguments.FirstOrDefault(a => a.Key == "SourceSignature");
             IncludeFields = namedArguments.FirstOrDefault(a => a.Key == "IncludeFields");
             GenerateToSource = namedArguments.FirstOrDefault(a => a.Key == "GenerateToSource");
+            BaseType = namedArguments.FirstOrDefault(a => a.Key == "BaseType");
+            Interfaces = namedArguments.FirstOrDefault(a => a.Key == "Interfaces");
         }
     }
 
@@ -457,6 +506,189 @@ public class FacetAttributeAnalyzer : DiagnosticAnalyzer
         }
     }
 
+    private static void ValidateConfiguredInheritance(
+        SymbolAnalysisContext context,
+        AttributeData facetAttr,
+        INamedTypeSymbol targetType,
+        INamedTypeSymbol sourceType,
+        FacetNamedArguments namedArgs)
+    {
+        var hasConfiguredBaseType = !namedArgs.BaseType.Equals(default) && !namedArgs.BaseType.Value.IsNull;
+        var hasConfiguredInterfaces = !namedArgs.Interfaces.Equals(default) &&
+                                      !namedArgs.Interfaces.Value.IsNull &&
+                                      namedArgs.Interfaces.Value.Kind == TypedConstantKind.Array &&
+                                      namedArgs.Interfaces.Value.Values.Length > 0;
+
+        if (!hasConfiguredBaseType && !hasConfiguredInterfaces)
+            return;
+
+        if (HasDeclaredBaseOrInterfaces(targetType))
+        {
+            context.ReportDiagnostic(Diagnostic.Create(
+                ConflictingInheritanceConfigurationRule,
+                facetAttr.ApplicationSyntaxReference?.GetSyntax().GetLocation(),
+                targetType.Name));
+            return;
+        }
+
+        INamedTypeSymbol? configuredBaseType = null;
+        if (hasConfiguredBaseType)
+        {
+            configuredBaseType = ValidateBaseTypeConfiguration(context, facetAttr, targetType, namedArgs.BaseType);
+        }
+
+        var configuredInterfaces = ValidateInterfaceConfiguration(context, facetAttr, namedArgs.Interfaces);
+        if (configuredInterfaces.Length == 0)
+            return;
+
+        ValidateConfiguredInterfaceProperties(
+            context,
+            facetAttr,
+            targetType,
+            sourceType,
+            configuredBaseType,
+            configuredInterfaces,
+            namedArgs);
+    }
+
+    private static INamedTypeSymbol? ValidateBaseTypeConfiguration(
+        SymbolAnalysisContext context,
+        AttributeData facetAttr,
+        INamedTypeSymbol targetType,
+        KeyValuePair<string, TypedConstant> baseTypeArg)
+    {
+        if (baseTypeArg.Equals(default) || baseTypeArg.Value.IsNull)
+            return null;
+
+        if (baseTypeArg.Value.Value is not INamedTypeSymbol baseType)
+            return null;
+
+        string? reason = null;
+        if (targetType.TypeKind == TypeKind.Struct)
+        {
+            reason = "struct and record struct facets cannot declare a base class";
+        }
+        else if (baseType.TypeKind != TypeKind.Class)
+        {
+            reason = "it must be a class";
+        }
+        else if (baseType.IsSealed)
+        {
+            reason = "it is sealed";
+        }
+        else if (baseType.IsStatic)
+        {
+            reason = "it is static";
+        }
+        else if (baseType.SpecialType == SpecialType.System_Object)
+        {
+            reason = "System.Object does not need to be specified";
+        }
+        else if (SymbolEqualityComparer.Default.Equals(baseType, targetType))
+        {
+            reason = "the facet type cannot inherit from itself";
+        }
+
+        if (reason != null)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(
+                InvalidBaseTypeRule,
+                facetAttr.ApplicationSyntaxReference?.GetSyntax().GetLocation(),
+                baseType.ToDisplayString(),
+                reason));
+            return null;
+        }
+
+        return baseType;
+    }
+
+    private static ImmutableArray<INamedTypeSymbol> ValidateInterfaceConfiguration(
+        SymbolAnalysisContext context,
+        AttributeData facetAttr,
+        KeyValuePair<string, TypedConstant> interfacesArg)
+    {
+        if (interfacesArg.Equals(default) || interfacesArg.Value.IsNull || interfacesArg.Value.Kind != TypedConstantKind.Array)
+            return ImmutableArray<INamedTypeSymbol>.Empty;
+
+        var interfaces = new List<INamedTypeSymbol>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var item in interfacesArg.Value.Values)
+        {
+            if (item.Value is not INamedTypeSymbol interfaceType)
+                continue;
+
+            var key = interfaceType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            if (!seen.Add(key))
+                continue;
+
+            string? reason = null;
+            if (interfaceType.TypeKind != TypeKind.Interface)
+            {
+                reason = "it must be an interface";
+            }
+            else
+            {
+                var unsupportedMember = GetAllInterfaceMembers(interfaceType)
+                    .FirstOrDefault(m => m is IMethodSymbol { MethodKind: MethodKind.Ordinary } or IEventSymbol or IPropertySymbol { IsIndexer: true });
+
+                if (unsupportedMember != null)
+                {
+                    reason = "only property-only interfaces are supported";
+                }
+            }
+
+            if (reason != null)
+            {
+                context.ReportDiagnostic(Diagnostic.Create(
+                    InvalidInterfaceRule,
+                    facetAttr.ApplicationSyntaxReference?.GetSyntax().GetLocation(),
+                    interfaceType.ToDisplayString(),
+                    reason));
+                continue;
+            }
+
+            interfaces.Add(interfaceType);
+        }
+
+        return interfaces.ToImmutableArray();
+    }
+
+    private static void ValidateConfiguredInterfaceProperties(
+        SymbolAnalysisContext context,
+        AttributeData facetAttr,
+        INamedTypeSymbol targetType,
+        INamedTypeSymbol sourceType,
+        INamedTypeSymbol? configuredBaseType,
+        ImmutableArray<INamedTypeSymbol> interfaces,
+        FacetNamedArguments namedArgs)
+    {
+        var generatedPropertyNames = GetGeneratedPropertyNames(sourceType, facetAttr, namedArgs);
+        var userDeclaredPropertyNames = GetUserDeclaredPublicPropertyNames(targetType);
+        var basePropertyNames = configuredBaseType is null
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : new HashSet<string>(GetAllPublicProperties(configuredBaseType).Select(p => p.Name), StringComparer.Ordinal);
+
+        foreach (var interfaceType in interfaces)
+        {
+            foreach (var property in GetAllInterfaceMembers(interfaceType).OfType<IPropertySymbol>().Where(p => !p.IsIndexer))
+            {
+                if (generatedPropertyNames.Contains(property.Name) ||
+                    userDeclaredPropertyNames.Contains(property.Name) ||
+                    basePropertyNames.Contains(property.Name))
+                {
+                    continue;
+                }
+
+                context.ReportDiagnostic(Diagnostic.Create(
+                    InterfacePropertyNotSatisfiedRule,
+                    facetAttr.ApplicationSyntaxReference?.GetSyntax().GetLocation(),
+                    property.Name,
+                    interfaceType.ToDisplayString()));
+            }
+        }
+    }
+
     private static HashSet<string> ExtractExcludedMembers(AttributeData attribute)
     {
         var excluded = new HashSet<string>();
@@ -612,6 +844,121 @@ public class FacetAttributeAnalyzer : DiagnosticAnalyzer
             parameterName,
             sourceType.ToDisplayString());
         context.ReportDiagnostic(diagnostic);
+    }
+
+    private static bool HasDeclaredBaseOrInterfaces(INamedTypeSymbol type)
+    {
+        foreach (var syntaxRef in type.DeclaringSyntaxReferences)
+        {
+            if (syntaxRef.GetSyntax() is TypeDeclarationSyntax typeDecl &&
+                typeDecl.BaseList is { Types.Count: > 0 })
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static HashSet<string> GetGeneratedPropertyNames(
+        INamedTypeSymbol sourceType,
+        AttributeData facetAttr,
+        FacetNamedArguments namedArgs)
+    {
+        var excluded = ExtractExcludedMembers(facetAttr);
+        var (included, isIncludeMode) = ExtractIncludedMembers(facetAttr);
+        var includeFields = !namedArgs.IncludeFields.Equals(default) &&
+                            namedArgs.IncludeFields.Value.Value is bool includeFieldsValue &&
+                            includeFieldsValue;
+
+        var generatedProperties = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var member in GetAllPublicMembers(sourceType))
+        {
+            if (isIncludeMode)
+            {
+                if (!included.Contains(member.Name))
+                    continue;
+            }
+            else if (excluded.Contains(member.Name))
+            {
+                continue;
+            }
+
+            if (member is IPropertySymbol)
+            {
+                generatedProperties.Add(member.Name);
+            }
+            else if (includeFields && member is IFieldSymbol)
+            {
+                // Fields are generated as fields, not properties, so they do not satisfy interface properties.
+                continue;
+            }
+        }
+
+        return generatedProperties;
+    }
+
+    private static HashSet<string> GetUserDeclaredPublicPropertyNames(INamedTypeSymbol targetType)
+    {
+        var propertyNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var member in targetType.GetMembers())
+        {
+            if (member is IPropertySymbol property && property.DeclaredAccessibility == Accessibility.Public)
+            {
+                propertyNames.Add(property.Name);
+            }
+        }
+
+        return propertyNames;
+    }
+
+    private static IEnumerable<IPropertySymbol> GetAllPublicProperties(INamedTypeSymbol type)
+    {
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var current = type;
+
+        while (current != null && current.SpecialType != SpecialType.System_Object)
+        {
+            foreach (var member in current.GetMembers())
+            {
+                if (member is IPropertySymbol property &&
+                    property.DeclaredAccessibility == Accessibility.Public &&
+                    visited.Add(property.Name))
+                {
+                    yield return property;
+                }
+            }
+
+            current = current.BaseType;
+        }
+    }
+
+    private static IEnumerable<ISymbol> GetAllInterfaceMembers(INamedTypeSymbol interfaceType)
+    {
+        var visitedInterfaces = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        var pending = new Stack<INamedTypeSymbol>();
+        pending.Push(interfaceType);
+
+        while (pending.Count > 0)
+        {
+            var current = pending.Pop();
+            if (!visitedInterfaces.Add(current))
+                continue;
+
+            foreach (var member in current.GetMembers())
+            {
+                if (!member.IsImplicitlyDeclared &&
+                    member is not IMethodSymbol { MethodKind: MethodKind.PropertyGet or MethodKind.PropertySet })
+                {
+                    yield return member;
+                }
+            }
+
+            foreach (var inherited in current.Interfaces)
+            {
+                pending.Push(inherited);
+            }
+        }
     }
 
     private static bool IsPartialType(INamedTypeSymbol type)

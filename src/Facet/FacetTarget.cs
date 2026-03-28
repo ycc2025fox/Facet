@@ -37,6 +37,8 @@ internal sealed class FacetTargetModel : IEquatable<FacetTargetModel>
     public bool PreserveReferences { get; }
     public ImmutableArray<string> BaseClassMemberNames { get; }
     public ImmutableArray<string> FlattenToTypes { get; }
+    public string? ConfiguredBaseTypeName { get; }
+    public ImmutableArray<string> ConfiguredInterfaceTypeNames { get; }
 
     /// <summary>
     /// The target type for enum conversion. "string" or "int", or null if no conversion.
@@ -80,6 +82,8 @@ internal sealed class FacetTargetModel : IEquatable<FacetTargetModel>
         bool preserveReferences = false,
         ImmutableArray<string> baseClassMemberNames = default,
         ImmutableArray<string> flattenToTypes = default,
+        string? configuredBaseTypeName = null,
+        ImmutableArray<string> configuredInterfaceTypeNames = default,
         string? beforeMapConfigurationTypeName = null,
         string? afterMapConfigurationTypeName = null,
         bool chainToParameterlessConstructor = false,
@@ -116,6 +120,8 @@ internal sealed class FacetTargetModel : IEquatable<FacetTargetModel>
         PreserveReferences = preserveReferences;
         BaseClassMemberNames = baseClassMemberNames.IsDefault ? ImmutableArray<string>.Empty : baseClassMemberNames;
         FlattenToTypes = flattenToTypes.IsDefault ? ImmutableArray<string>.Empty : flattenToTypes;
+        ConfiguredBaseTypeName = configuredBaseTypeName;
+        ConfiguredInterfaceTypeNames = configuredInterfaceTypeNames.IsDefault ? ImmutableArray<string>.Empty : configuredInterfaceTypeNames;
         ConvertEnumsTo = convertEnumsTo;
         GenerateCopyConstructor = generateCopyConstructor;
         GenerateEquality = generateEquality;
@@ -154,6 +160,8 @@ internal sealed class FacetTargetModel : IEquatable<FacetTargetModel>
             && PreserveReferences == other.PreserveReferences
             && BaseClassMemberNames.SequenceEqual(other.BaseClassMemberNames)
             && FlattenToTypes.SequenceEqual(other.FlattenToTypes)
+            && ConfiguredBaseTypeName == other.ConfiguredBaseTypeName
+            && ConfiguredInterfaceTypeNames.SequenceEqual(other.ConfiguredInterfaceTypeNames)
             && ConvertEnumsTo == other.ConvertEnumsTo
             && GenerateCopyConstructor == other.GenerateCopyConstructor
             && GenerateEquality == other.GenerateEquality;
@@ -188,6 +196,7 @@ internal sealed class FacetTargetModel : IEquatable<FacetTargetModel>
             hash = hash * 31 + CopyAttributes.GetHashCode();
             hash = hash * 31 + MaxDepth.GetHashCode();
             hash = hash * 31 + PreserveReferences.GetHashCode();
+            hash = hash * 31 + (ConfiguredBaseTypeName?.GetHashCode() ?? 0);
             hash = hash * 31 + (ConvertEnumsTo?.GetHashCode() ?? 0);
             hash = hash * 31 + GenerateCopyConstructor.GetHashCode();
             hash = hash * 31 + GenerateEquality.GetHashCode();
@@ -210,6 +219,9 @@ internal sealed class FacetTargetModel : IEquatable<FacetTargetModel>
 
             foreach (var flattenToType in FlattenToTypes)
                 hash = hash * 31 + (flattenToType?.GetHashCode() ?? 0);
+
+            foreach (var configuredInterfaceTypeName in ConfiguredInterfaceTypeNames)
+                hash = hash * 31 + (configuredInterfaceTypeName?.GetHashCode() ?? 0);
 
             return hash;
         }

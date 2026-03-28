@@ -86,6 +86,8 @@ internal static class FacetConstants
     public static class AttributeNames
     {
         public const string NestedFacets = "NestedFacets";
+        public const string BaseType = "BaseType";
+        public const string Interfaces = "Interfaces";
         public const string NestedWrappers = "NestedWrappers";
         public const string FlattenTo = "FlattenTo";
         public const string Include = "Include";

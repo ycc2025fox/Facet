@@ -6,3 +6,5 @@
 Rule ID | Category | Severity | Notes
 --------|----------|----------|-------
 FAC023 | Usage | Warning | GenerateToSource is set to true, but ToSource cannot be generated
+FAC028 | CodeFix | Warning | xxxDto is missing xxxGetListInput companion type
+FAC029 | CodeFix | Warning | xxxDto is missing CreateUpdatexxxDto companion type

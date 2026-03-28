@@ -102,6 +102,20 @@ public sealed class FacetAttribute : Attribute
     public Type[]? NestedFacets { get; set; }
 
     /// <summary>
+    /// Optional base type for the generated facet declaration.
+    /// This only affects the generated declaration and does not automatically include source members.
+    /// Members expected by the base type must already be satisfied by the base type itself.
+    /// </summary>
+    public Type? BaseType { get; set; }
+
+    /// <summary>
+    /// Optional interfaces for the generated facet declaration.
+    /// This only affects the generated declaration. Interface properties must already be satisfied by
+    /// generated facet members, the configured base type, or user-declared members on the partial target type.
+    /// </summary>
+    public Type[]? Interfaces { get; set; }
+
+    /// <summary>
     /// When true, copies attributes from the source type members to the generated facet members.
     /// Only copies attributes that are valid on the target (excludes internal compiler attributes and non-copiable attributes).
     /// Default is false.
@@ -364,8 +378,8 @@ public sealed class FacetAttribute : Attribute
     ///
     /// var dto1 = new UserDto(user);
     /// var dto2 = new UserDto(user);
-    /// dto1.Equals(dto2); // true — value-based comparison
-    /// dto1 == dto2;      // true — operator overload
+    /// dto1.Equals(dto2); // true - value-based comparison
+    /// dto1 == dto2;      // true - operator overload
     /// </code>
     /// </example>
     public bool GenerateEquality { get; set; } = false;
